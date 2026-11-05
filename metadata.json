@@ -1,0 +1,8 @@
+{
+  "name": "Remix HyperTrade AI",
+  "description": "AI-driven Hyperliquid futures trading platform with automated management, on-chain wallet integration, and a dedicated expert-level AI chat assistant.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
