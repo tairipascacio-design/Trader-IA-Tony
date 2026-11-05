@@ -4,6 +4,7 @@ import { OrderBook } from './OrderBook';
 import { RecentTrades } from './RecentTrades';
 import { OrderConsole } from './OrderConsole';
 import { AutonomousBotPanel } from './AutonomousBotPanel';
+import { YieldArbitrageVaultPanel } from './YieldArbitrageVaultPanel';
 import { PositionsTable } from './PositionsTable';
 
 export const TradingTerminal: React.FC = () => {
@@ -38,6 +39,11 @@ export const TradingTerminal: React.FC = () => {
         <div className="lg:col-span-7">
           <AutonomousBotPanel />
         </div>
+      </div>
+
+      {/* Passive Yield & Protection Section: Delta-Neutral Arbitrage, MEV Shield & Auto-Compound Vault */}
+      <div>
+        <YieldArbitrageVaultPanel />
       </div>
 
       {/* Bottom Section: Positions & Trade Ledger */}

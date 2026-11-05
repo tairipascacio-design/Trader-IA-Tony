@@ -1322,21 +1322,536 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
         to: toAddress,
         timestamp: Date.now(),
         status: 'CONFIRMED',
-        gasUsed: '21000 (0.00012 ETH)',
+        gasUsed: mevShield.isEnabled ? '21000 (0.00009 ETH - Private RPC)' : '21000 (0.00012 ETH)',
         blockNumber: 28459102 + Math.floor(Math.random() * 500),
       };
 
       setOnChainTransfers((prev) => [transfer, ...prev]);
 
+      if (mevShield.isEnabled) {
+        const assetPrice = asset === 'USDC' ? 1 : asset === 'ETH' ? (markets['ETH-PERP']?.price || 3418) : asset === 'HYPE' ? (markets['HYPE-PERP']?.price || 32.84) : 0.84;
+        const amountUsd = +(amount * assetPrice).toFixed(2);
+        const saved = +Math.max(0.85, amountUsd * 0.0042).toFixed(2);
+        setMevShield((prev) => ({
+          ...prev,
+          totalSavedUsd: +(prev.totalSavedUsd + saved).toFixed(2),
+          sandwichAttacksBlocked: prev.sandwichAttacksBlocked + 1,
+          frontrunsAverted: prev.frontrunsAverted + 1,
+          transactionsShielded: prev.transactionsShielded + 1,
+        }));
+        setMevLogs((prev) => [
+          {
+            id: `mev-${Date.now()}`,
+            timestamp: Date.now(),
+            action: 'ONCHAIN_TRANSFER',
+            asset,
+            amountUsd,
+            provider: mevShield.provider,
+            txHash: hash,
+            mevSavedUsd: saved,
+            sandwichRiskAverted: true,
+            blockNumber: transfer.blockNumber,
+            status: 'PROTECTED_PRIVATE_BUNDLE',
+          },
+          ...prev.slice(0, 29),
+        ]);
+      }
+
       addToast({
         type: 'success',
-        title: `Transferencia On-Chain Confirmada`,
+        title: mevShield.isEnabled ? `🛡️ Transferencia Protegida (MEV Shield)` : `Transferencia On-Chain Confirmada`,
         message: `Enviados ${amount} ${asset} a ${toAddress.slice(0, 6)}...${toAddress.slice(-4)}. TX: ${hash.slice(0, 10)}...`,
       });
 
       return hash;
     },
-    [wallet.balances, wallet.address, addToast]
+    [wallet.balances, wallet.address, mevShield.isEnabled, mevShield.provider, markets, addToast]
+  );
+
+  // Helper to record MEV-shielded Arbitrum execution
+  const recordMevProtectedTx = useCallback(
+    (action: MEVShieldLog['action'], asset: string, amountUsd: number, txHash: string) => {
+      if (!mevShield.isEnabled) return 0;
+      const saved = +Math.max(1.25, amountUsd * 0.0048).toFixed(2);
+      setMevShield((prev) => ({
+        ...prev,
+        totalSavedUsd: +(prev.totalSavedUsd + saved).toFixed(2),
+        sandwichAttacksBlocked: prev.sandwichAttacksBlocked + 1,
+        frontrunsAverted: prev.frontrunsAverted + 2,
+        transactionsShielded: prev.transactionsShielded + 1,
+      }));
+      setMevLogs((prev) => [
+        {
+          id: `mev-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          timestamp: Date.now(),
+          action,
+          asset,
+          amountUsd: +amountUsd.toFixed(2),
+          provider: mevShield.provider,
+          txHash,
+          mevSavedUsd: saved,
+          sandwichRiskAverted: true,
+          blockNumber: 29482500 + Math.floor(Math.random() * 900),
+          status: 'PROTECTED_PRIVATE_BUNDLE',
+        },
+        ...prev.slice(0, 29),
+      ]);
+      return saved;
+    },
+    [mevShield.isEnabled, mevShield.provider]
+  );
+
+  // Live 8h Funding Epoch Countdown
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const now = Date.now();
+      const eightHoursMs = 8 * 3600 * 1000;
+      const remaining = eightHoursMs - (now % eightHoursMs);
+      const hrs = Math.floor(remaining / 3600000);
+      const mins = Math.floor((remaining % 3600000) / 60000);
+      const secs = Math.floor((remaining % 60000) / 1000);
+      setNextFundingEpochCountdown(
+        `${String(hrs).padStart(2, '0')}h ${String(mins).padStart(2, '0')}m ${String(secs).padStart(2, '0')}s`
+      );
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Compute live Delta-Neutral Arbitrage Opportunities
+  const arbitrageOpportunities: ArbitrageOpportunity[] = (Object.keys(markets) as MarketSymbol[])
+    .map((sym) => {
+      const m = markets[sym];
+      const asset = sym.replace('-PERP', '');
+      // Simulate realistic spot vs perp basis spread & 8h funding
+      const effectiveFunding8h =
+        sym === 'ETH-PERP'
+          ? Math.max(0.0008, m.fundingRate * 4) // +0.080% per 8h -> ~127% APY
+          : sym === 'HYPE-PERP'
+          ? Math.max(0.00065, m.fundingRate * 2)
+          : Math.max(0.00025, m.fundingRate);
+      const basisSpreadPct =
+        sym === 'ETH-PERP'
+          ? 0.34
+          : sym === 'HYPE-PERP'
+          ? 0.29
+          : sym === 'SOL-PERP'
+          ? 0.24
+          : 0.16;
+      const spotPrice = +(m.price * (1 - basisSpreadPct / 100)).toFixed(m.price > 100 ? 2 : 4);
+      // Annualized APY: (funding8h * 3 * 365 * 100) + basis capture
+      const annualizedApy =
+        sym === 'ETH-PERP'
+          ? 127.4
+          : +(effectiveFunding8h * 3 * 365 * 100 + basisSpreadPct * 12).toFixed(1);
+
+      return {
+        symbol: sym,
+        asset,
+        spotDex: 'Uniswap v3 (Arbitrum)',
+        spotPrice,
+        perpPrice: m.price,
+        basisSpreadPct,
+        fundingRate8h: effectiveFunding8h,
+        annualizedApy,
+        estimated8hYieldUsd: +(1000 * effectiveFunding8h).toFixed(2),
+        liquidityDepthUsd: Math.round(m.openInterest * 0.18),
+        isRecommended: effectiveFunding8h >= deltaArbMinFundingThreshold,
+      };
+    })
+    .sort((a, b) => b.annualizedApy - a.annualizedApy);
+
+  const toggleDeltaArbBot = useCallback(() => {
+    setIsDeltaArbBotEnabled((prev) => {
+      const next = !prev;
+      addToast({
+        type: next ? 'success' : 'warning',
+        title: next ? '⚖️ Bot Arbitraje Delta-Neutral: ON' : '⚖️ Bot Arbitraje Delta-Neutral: OFF',
+        message: next
+          ? 'Monitoreando funding positivo en Hyperliquid para ejecutar Spot Arbitrum + Short 1x sin riesgo de precio.'
+          : 'Ejecución automática de arbitraje delta-neutral pausada.',
+      });
+      return next;
+    });
+  }, [addToast]);
+
+  const openDeltaNeutralPosition = useCallback(
+    async (symbol: MarketSymbol, capitalUsd: number): Promise<boolean> => {
+      if (capitalUsd < 50) {
+        addToast({
+          type: 'error',
+          title: 'Capital Mínimo $50 USDC',
+          message: 'Se requieren al menos $50 USDC para dividir entre Spot Arbitrum y Short Hyperliquid.',
+        });
+        return false;
+      }
+      if (wallet.balances.USDC < capitalUsd) {
+        addToast({
+          type: 'error',
+          title: 'Saldo Insuficiente',
+          message: `Necesitas $${capitalUsd.toFixed(2)} USDC disponibles en tu Bóveda.`,
+        });
+        return false;
+      }
+
+      const opp = arbitrageOpportunities.find((o) => o.symbol === symbol) || arbitrageOpportunities[0];
+      const halfCapital = capitalUsd / 2;
+      const spotSize = +(halfCapital / opp.spotPrice).toFixed(4);
+      const perpShortSize = spotSize; // Exact 1:1 Delta-Neutral hedge (Delta = 0)
+
+      const spotTxHash = createTransactionHash();
+      const perpTxHash = createTransactionHash();
+
+      // Deduct capital from USDC balance
+      setWallet((prev) => ({
+        ...prev,
+        balances: {
+          ...prev.balances,
+          USDC: +(prev.balances.USDC - capitalUsd).toFixed(2),
+        },
+      }));
+
+      // Protect Arbitrum Uniswap v3 Spot buy with MEV Shield
+      const mevSaved = recordMevProtectedTx('UNISWAP_SPOT_BUY', opp.asset, halfCapital, spotTxHash);
+
+      const newDeltaPos: DeltaNeutralPosition = {
+        id: `dn-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        symbol: opp.symbol,
+        asset: opp.asset,
+        spotSize,
+        perpShortSize,
+        spotEntryPrice: opp.spotPrice,
+        perpEntryPrice: opp.perpPrice,
+        basisSpreadPct: opp.basisSpreadPct,
+        fundingRate8h: opp.fundingRate8h,
+        annualizedApy: opp.annualizedApy,
+        totalAllocatedUsd: capitalUsd,
+        accruedFundingUsd: +(capitalUsd * (opp.basisSpreadPct / 100) * 0.5).toFixed(2), // Initial spread capture
+        epochsCollected: 1,
+        openedAt: Date.now(),
+        lastFundingSettledAt: Date.now(),
+        status: 'ACTIVE',
+        mevShieldUsed: mevShield.isEnabled,
+        spotTxHash,
+        perpTxHash,
+      };
+
+      setDeltaPositions((prev) => [newDeltaPos, ...prev]);
+
+      setAiLogs((prev) => [
+        {
+          id: Math.random().toString(36).substring(2, 9),
+          timestamp: Date.now(),
+          type: 'EXECUTION',
+          symbol: opp.symbol,
+          message: `[DELTA-NEUTRAL 0] Compra SPOT ${spotSize} ${opp.asset} en Arbitrum Uniswap ($${opp.spotPrice}) + SHORT 1x ${perpShortSize} ${opp.asset} en Hyperliquid ($${opp.perpPrice}). Spread ${opp.basisSpreadPct}% | APY ${opp.annualizedApy}%. ${mevSaved > 0 ? `MEV Shield ahorró $${mevSaved}.` : ''}`,
+          details: { txHash: spotTxHash },
+        },
+        ...prev.slice(0, 49),
+      ]);
+
+      confetti({ particleCount: 45, spread: 65, origin: { y: 0.75 } });
+
+      addToast({
+        type: 'success',
+        title: `⚖️ Posición Delta-Neutral Abierta (${opp.asset})`,
+        message: `Spot Uniswap + Short Hyperliquid (${spotSize} ${opp.asset}). APY ${opp.annualizedApy}% | Riesgo de precio: $0.00.`,
+      });
+
+      return true;
+    },
+    [wallet.balances.USDC, arbitrageOpportunities, recordMevProtectedTx, mevShield.isEnabled, addToast]
+  );
+
+  const closeDeltaNeutralPosition = useCallback(
+    async (id: string) => {
+      const pos = deltaPositions.find((p) => p.id === id);
+      if (!pos) return;
+
+      const unwindHash = createTransactionHash();
+      recordMevProtectedTx('ARBITRAGE_REBALANCE', pos.asset, pos.totalAllocatedUsd / 2, unwindHash);
+
+      const totalReturned = +(pos.totalAllocatedUsd + pos.accruedFundingUsd).toFixed(2);
+      setWallet((prev) => ({
+        ...prev,
+        balances: {
+          ...prev.balances,
+          USDC: +(prev.balances.USDC + totalReturned).toFixed(2),
+        },
+      }));
+
+      setDeltaPositions((prev) => prev.filter((p) => p.id !== id));
+
+      addToast({
+        type: 'success',
+        title: `⚖️ Arbitraje Delta-Neutral Cerrado (${pos.asset})`,
+        message: `Capital + Funding devuelto a Bóveda: $${totalReturned.toFixed(2)} USDC (+$${pos.accruedFundingUsd.toFixed(2)} de funding ganado).`,
+      });
+    },
+    [deltaPositions, recordMevProtectedTx, addToast]
+  );
+
+  const triggerFundingHarvest = useCallback(async () => {
+    if (deltaPositions.length === 0) {
+      addToast({
+        type: 'info',
+        title: 'Sin Posiciones Delta-Neutral',
+        message: 'Abre una posición Delta-Neutral primero para cosechar pagos de funding cada 8h.',
+      });
+      return;
+    }
+
+    let totalHarvested = 0;
+    setDeltaPositions((prev) =>
+      prev.map((pos) => {
+        const epochYield = +(pos.totalAllocatedUsd * pos.fundingRate8h).toFixed(2);
+        totalHarvested += epochYield;
+        return {
+          ...pos,
+          accruedFundingUsd: +(pos.accruedFundingUsd + epochYield).toFixed(2),
+          epochsCollected: pos.epochsCollected + 1,
+          lastFundingSettledAt: Date.now(),
+        };
+      })
+    );
+
+    totalHarvested = +totalHarvested.toFixed(2);
+    const harvestHash = createTransactionHash();
+
+    if (vaultState.isEnabled && totalHarvested > 0) {
+      recordMevProtectedTx('VAULT_COMPOUND', 'USDC/ETH', totalHarvested, harvestHash);
+      setVaultState((prev) => {
+        const newTotal = +(prev.totalDepositedUsd + totalHarvested).toFixed(2);
+        const newEpoch: AutoCompoundEpoch = {
+          id: `ep-${Date.now()}`,
+          timestamp: Date.now(),
+          source: 'FUNDING_HARVEST',
+          amountUsd: totalHarvested,
+          reinvestedInto: `${prev.allocationUsdcPct}% USDC Lending / ${prev.allocationEthPct}% ETH Staking`,
+          cumulativeTvlUsd: newTotal,
+          txHash: harvestHash,
+        };
+        return {
+          ...prev,
+          totalDepositedUsd: newTotal,
+          totalYieldEarnedUsd: +(prev.totalYieldEarnedUsd + totalHarvested).toFixed(2),
+          lastCompoundedAt: Date.now(),
+          compoundHistory: [newEpoch, ...prev.compoundHistory.slice(0, 19)],
+        };
+      });
+
+      addToast({
+        type: 'success',
+        title: `🌾 Funding 8h Cosechado & Auto-Compuesto`,
+        message: `+$${totalHarvested.toFixed(2)} USDC cobrados de funding y reinvertidos automáticamente en el Vault (${vaultState.allocationUsdcPct}% USDC / ${vaultState.allocationEthPct}% ETH).`,
+      });
+    } else {
+      setWallet((prev) => ({
+        ...prev,
+        balances: {
+          ...prev.balances,
+          USDC: +(prev.balances.USDC + totalHarvested).toFixed(2),
+        },
+      }));
+      addToast({
+        type: 'success',
+        title: `🌾 Funding 8h Cosechado`,
+        message: `+$${totalHarvested.toFixed(2)} USDC acreditados directamente a tu Bóveda.`,
+      });
+    }
+  }, [deltaPositions.length, vaultState.isEnabled, vaultState.allocationUsdcPct, vaultState.allocationEthPct, recordMevProtectedTx, addToast]);
+
+  // 2. MEV Shield Controls
+  const toggleMevShield = useCallback(() => {
+    setMevShield((prev) => {
+      const next = !prev.isEnabled;
+      addToast({
+        type: next ? 'success' : 'warning',
+        title: next ? '🛡️ MEV Shield: ACTIVADO' : '⚠️ MEV Shield: DESACTIVADO',
+        message: next
+          ? `Swaps y transfers en Arbitrum enrutados por RPC privado (${prev.provider}). Cero ataques sandwich.`
+          : 'Tus transacciones irán al mempool público. Riesgo de frontrunning.',
+      });
+      return { ...prev, isEnabled: next };
+    });
+  }, [addToast]);
+
+  const setMevProvider = useCallback(
+    (provider: MEVProvider) => {
+      const rpcMap: Record<MEVProvider, string> = {
+        FLASHBOTS_PROTECT: 'https://rpc.flashbots.net',
+        BEBOP_PRIVATE: 'https://api.bebop.xyz/arbitrum/v2/private-rpc',
+        EDEN_NETWORK: 'https://api.edennetwork.io/v1/rpc',
+      };
+      setMevShield((prev) => ({
+        ...prev,
+        provider,
+        rpcUrl: rpcMap[provider],
+      }));
+      addToast({
+        type: 'info',
+        title: `🛡️ Ruta Privada Actualizada`,
+        message: `Enrutando transacciones de Arbitrum vía ${provider.replace('_', ' ')}.`,
+      });
+    },
+    [addToast]
+  );
+
+  // 3. Auto-Compound Vault Controls
+  const toggleAutoCompoundVault = useCallback(() => {
+    setVaultState((prev) => {
+      const next = !prev.isEnabled;
+      addToast({
+        type: next ? 'success' : 'warning',
+        title: next ? '🔄 Auto-Compound Vault: ACTIVO' : '⏸️ Auto-Compound Vault: PAUSADO',
+        message: next
+          ? `Las ganancias de funding y trading se reinvertirán automáticamente en ${prev.allocationUsdcPct}% USDC / ${prev.allocationEthPct}% ETH.`
+          : 'Las ganancias de funding irán directamente a tu balance líquido de USDC.',
+      });
+      return { ...prev, isEnabled: next };
+    });
+  }, [addToast]);
+
+  const setVaultStrategy = useCallback(
+    (strategy: VaultStrategy, usdcPct?: number, ethPct?: number) => {
+      setVaultState((prev) => {
+        const nextUsdc =
+          usdcPct !== undefined
+            ? usdcPct
+            : strategy === 'MAX_USDC_YIELD'
+            ? 90
+            : strategy === 'HYPERLIQUID_MARGIN_REINVEST'
+            ? 50
+            : 70;
+        const nextEth = ethPct !== undefined ? ethPct : 100 - nextUsdc;
+        const nextApy =
+          strategy === 'MAX_USDC_YIELD' ? 19.4 : strategy === 'HYPERLIQUID_MARGIN_REINVEST' ? 34.2 : 24.8;
+        return {
+          ...prev,
+          targetStrategy: strategy,
+          allocationUsdcPct: nextUsdc,
+          allocationEthPct: nextEth,
+          currentApy: nextApy,
+        };
+      });
+    },
+    []
+  );
+
+  const manualCompoundNow = useCallback(async () => {
+    const simulatedYield = +(Math.max(4.5, vaultState.totalDepositedUsd * 0.0085)).toFixed(2);
+    const txHash = createTransactionHash();
+    recordMevProtectedTx('VAULT_COMPOUND', 'USDC/ETH', simulatedYield, txHash);
+
+    setVaultState((prev) => {
+      const newTotal = +(prev.totalDepositedUsd + simulatedYield).toFixed(2);
+      const newEpoch: AutoCompoundEpoch = {
+        id: `ep-${Date.now()}`,
+        timestamp: Date.now(),
+        source: 'TRADING_PROFIT',
+        amountUsd: simulatedYield,
+        reinvestedInto: `${prev.allocationUsdcPct}% USDC / ${prev.allocationEthPct}% ETH`,
+        cumulativeTvlUsd: newTotal,
+        txHash,
+      };
+      return {
+        ...prev,
+        totalDepositedUsd: newTotal,
+        totalYieldEarnedUsd: +(prev.totalYieldEarnedUsd + simulatedYield).toFixed(2),
+        lastCompoundedAt: Date.now(),
+        compoundHistory: [newEpoch, ...prev.compoundHistory.slice(0, 19)],
+      };
+    });
+
+    confetti({ particleCount: 35, spread: 55, origin: { y: 0.8 } });
+    addToast({
+      type: 'success',
+      title: `🔄 Interés Compuesto Ejecutado`,
+      message: `+$${simulatedYield.toFixed(2)} USDC reinvertidos en ${vaultState.allocationUsdcPct}% USDC / ${vaultState.allocationEthPct}% ETH vía ruta privada.`,
+    });
+  }, [vaultState.totalDepositedUsd, vaultState.allocationUsdcPct, vaultState.allocationEthPct, recordMevProtectedTx, addToast]);
+
+  const depositToVault = useCallback(
+    async (amountUsd: number): Promise<boolean> => {
+      if (amountUsd <= 0 || wallet.balances.USDC < amountUsd) {
+        addToast({
+          type: 'error',
+          title: 'Saldo Insuficiente',
+          message: `No tienes $${amountUsd} USDC disponibles para depositar en el Vault.`,
+        });
+        return false;
+      }
+
+      const txHash = createTransactionHash();
+      recordMevProtectedTx('VAULT_COMPOUND', 'USDC', amountUsd, txHash);
+
+      setWallet((prev) => ({
+        ...prev,
+        balances: {
+          ...prev.balances,
+          USDC: +(prev.balances.USDC - amountUsd).toFixed(2),
+        },
+      }));
+
+      setVaultState((prev) => {
+        const newTotal = +(prev.totalDepositedUsd + amountUsd).toFixed(2);
+        const newEpoch: AutoCompoundEpoch = {
+          id: `ep-${Date.now()}`,
+          timestamp: Date.now(),
+          source: 'MANUAL_DEPOSIT',
+          amountUsd,
+          reinvestedInto: `${prev.allocationUsdcPct}% USDC / ${prev.allocationEthPct}% ETH`,
+          cumulativeTvlUsd: newTotal,
+          txHash,
+        };
+        return {
+          ...prev,
+          totalDepositedUsd: newTotal,
+          compoundHistory: [newEpoch, ...prev.compoundHistory.slice(0, 19)],
+        };
+      });
+
+      addToast({
+        type: 'success',
+        title: `🏦 Depósito en Auto-Compound Vault`,
+        message: `+$${amountUsd.toFixed(2)} USDC depositados y generando ${vaultState.currentApy}% APY compuesto.`,
+      });
+      return true;
+    },
+    [wallet.balances.USDC, vaultState.currentApy, recordMevProtectedTx, addToast]
+  );
+
+  const withdrawFromVault = useCallback(
+    async (amountUsd: number): Promise<boolean> => {
+      if (amountUsd <= 0 || vaultState.totalDepositedUsd < amountUsd) {
+        addToast({
+          type: 'error',
+          title: 'Fondos Insuficientes en Vault',
+          message: `El Vault tiene $${vaultState.totalDepositedUsd.toFixed(2)} USDC disponibles.`,
+        });
+        return false;
+      }
+
+      setVaultState((prev) => ({
+        ...prev,
+        totalDepositedUsd: +(prev.totalDepositedUsd - amountUsd).toFixed(2),
+      }));
+
+      setWallet((prev) => ({
+        ...prev,
+        balances: {
+          ...prev.balances,
+          USDC: +(prev.balances.USDC + amountUsd).toFixed(2),
+        },
+      }));
+
+      addToast({
+        type: 'info',
+        title: `💸 Retiro del Auto-Compound Vault`,
+        message: `$${amountUsd.toFixed(2)} USDC devueltos a tu Bóveda principal.`,
+      });
+      return true;
+    },
+    [vaultState.totalDepositedUsd, addToast]
   );
 
   const addLearnedPattern = useCallback((p: Omit<LearnedPattern, 'id' | 'lastUpdated'>) => {
@@ -1444,6 +1959,30 @@ export const TradingProvider: React.FC<{ children: React.ReactNode }> = ({ child
         selectedVerifyHash,
         openHashVerifier,
         closeHashVerifier,
+        // 1. Funding Arbitrage Delta-Neutral
+        deltaPositions,
+        arbitrageOpportunities,
+        isDeltaArbBotEnabled,
+        toggleDeltaArbBot,
+        deltaArbMinFundingThreshold,
+        setDeltaArbMinFundingThreshold,
+        openDeltaNeutralPosition,
+        closeDeltaNeutralPosition,
+        triggerFundingHarvest,
+        nextFundingEpochCountdown,
+        // 2. MEV Shield
+        mevShield,
+        toggleMevShield,
+        setMevProvider,
+        mevLogs,
+        // 3. Auto-Compound Vault
+        vaultState,
+        toggleAutoCompoundVault,
+        setVaultStrategy,
+        manualCompoundNow,
+        depositToVault,
+        withdrawFromVault,
+        // UI
         toasts,
         addToast,
         removeToast,

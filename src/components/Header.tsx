@@ -40,6 +40,8 @@ export const Header: React.FC<HeaderProps> = ({ currentTab, setCurrentTab }) => 
     connectRealWeb3Wallet,
     isLiveOrderFlowConnected,
     openHashVerifier,
+    mevShield,
+    arbitrageOpportunities,
   } = useTrading();
 
   const curMarket = markets[activeSymbol];
@@ -79,6 +81,14 @@ export const Header: React.FC<HeaderProps> = ({ currentTab, setCurrentTab }) => 
           <span className="text-zinc-700">|</span>
           <span className="text-amber-300/90 font-mono">
             Funding 8h: <span className="text-emerald-400 font-bold">+{(curMarket.fundingRate * 100).toFixed(4)}%</span>
+          </span>
+          <span className="text-zinc-700 hidden sm:inline">|</span>
+          <span className="text-cyan-300 font-mono hidden sm:inline">
+            🛡️ MEV Saved <span className="text-emerald-400 font-bold">${mevShield.totalSavedUsd.toFixed(2)}</span>
+          </span>
+          <span className="text-zinc-700 hidden md:inline">|</span>
+          <span className="text-amber-200 font-mono hidden md:inline">
+            ⚖️ Spread {arbitrageOpportunities[0]?.basisSpreadPct.toFixed(2)}% APY <span className="text-emerald-400 font-bold">{arbitrageOpportunities[0]?.annualizedApy.toFixed(0)}%</span>
           </span>
         </div>
       </div>
