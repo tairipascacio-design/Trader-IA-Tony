@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { SpeedInsights } from '@vercel/speed-insights/react';
 import { TradingProvider, useTrading } from './context/TradingContext';
 import { Header } from './components/Header';
 import { TradingTerminal } from './components/TradingTerminal';
@@ -97,6 +98,7 @@ export default function App() {
   return (
     <TradingProvider>
       <MainApp />
+      <SpeedInsights />
     </TradingProvider>
   );
 }
